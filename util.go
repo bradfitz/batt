@@ -16,8 +16,13 @@ func (m Message) String() string {
 
 func ParseMessage(s string) (m Message, err error) {
 	var v string
-	_, err = fmt.Sscan(s, &m.Verb, &v)
-	if err != nil {
+	var n int
+	n, err = fmt.Sscan(s, &m.Verb, &v)
+	if err != nil && n != 1 {
+		if n == 1 {
+			// ok to scan verb only
+			err = nil
+		}
 		return
 	}
 	m.Values, err = url.ParseQuery(v)
