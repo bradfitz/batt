@@ -10,6 +10,10 @@ type Message struct {
 	Verb string
 }
 
+func (m Message) String() string {
+	return fmt.Sprintf("%v %v", m.Verb, m.Values)
+}
+
 func ParseMessage(s string) (m Message, err error) {
 	var v string
 	_, err = fmt.Sscan(s, &m.Verb, &v)
