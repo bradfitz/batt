@@ -46,10 +46,18 @@ func acceptWorkers(ln net.Listener) {
 	}
 }
 
-func runWorker(c net.Conn) {
-	log.Printf("Got potential worker connection from %s", c.RemoteAddr())
-	// TODO
-	c.Close()
+func runWorker(nc net.Conn) {
+	defer nc.Close()
+	addr := nc.RemoteAddr()
+	log.Printf("Got potential worker connection from %s", addr)
+	c := batt.NewConn()
+	go func() {
+		for m := range c.In {
+			log.Printf("Message from %s: %+v", addr, m)
+		}
+	}()
+	err := c.Do(nc)
+	log.Printf("Worker conn %v Do = %v", addr, err)
 }
 
 func main() {
