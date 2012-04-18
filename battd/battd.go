@@ -3,19 +3,16 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
+
+	"github.com/bradfitz/batt"
 )
 
 var (
 	webListen  = flag.String("web", ":8080", "web listen address")
 	tcpListen  = flag.String("tcp", ":9999", "TCP listen address")
-	secretFile = flag.String("secretfile", filepath.Join(os.Getenv("HOME"), ".batt-secret"), "filename of secret")
 )
 
 func home(w http.ResponseWriter, r *http.Request) {
@@ -56,14 +53,7 @@ func runWorker(c net.Conn) {
 }
 
 func main() {
-	flag.Parse()
-
-	slurp, err := ioutil.ReadFile(*secretFile)
-	if err != nil {
-		log.Fatalf("Error reading secret file: %v", err)
-	}
-	secret := strings.TrimSpace(string(slurp))
-	_ = secret
+	batt.Init()
 
 	http.HandleFunc("/", home)
 	http.HandleFunc("/build", build)
