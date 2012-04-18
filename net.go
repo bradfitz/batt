@@ -13,8 +13,8 @@ func NewConn() *Conn {
 }
 
 type Conn struct {
-	In      chan<- Message
-	Out     <-chan Message
+	In      <-chan Message
+	Out     chan<- Message
 	in, out chan Message
 }
 
@@ -59,5 +59,6 @@ func (c *Conn) Do(nc net.Conn) error {
 	}()
 	err := <-errc
 	done <- true
+	nc.Close()
 	return err
 }
