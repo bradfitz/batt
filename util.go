@@ -11,7 +11,7 @@ type Message struct {
 }
 
 func (m Message) String() string {
-	return fmt.Sprintf("%v %v", m.Verb, m.Values)
+	return fmt.Sprintf("%v %v", m.Verb, m.Values.Encode())
 }
 
 func ParseMessage(s string) (m Message, err error) {
