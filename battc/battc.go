@@ -17,7 +17,7 @@ import (
 )
 
 var (
-	serverAddr = flag.String("server", "zon.danga.com:9999", "server address:port")
+	serverAddr = flag.String("server", "gophorge.com:9999", "server address:port")
 	platforms  []string
 )
 
@@ -95,6 +95,7 @@ func connect(addr string) error {
 }
 
 func handler() {
+	jobs := make(map[string]*Job)
 	for {
 		var m batt.Message
 		select {
@@ -103,25 +104,42 @@ func handler() {
 			continue
 		case m = <-in:
 		}
+
 		log.Println("Message received:", m)
 		switch m.Verb {
+		case "nop":
 		case "build":
-			// TODO(adg): validate input
-			go build(m.Get("h"), m.Get("path"))
+			j := NewJob(m)
+			jobs[j.h] = j
+			go j.Build()
 		case "accept":
 		default:
-			log.Println("Unknown verb: %v", m.Verb)
+			log.Printf("unknown verb %q", m.Verb)
 		}
 	}
 }
 
-func build(h, path string) {
+func NewJob(m batt.Message) *Job {
+	return &Job{
+		h:    m.Get("h"),
+		path: m.Get("path"),
+		in:   make(chan batt.Message),
+	}
+}
+
+type Job struct {
+	h, path string
+	in      chan batt.Message
+}
+
+func (j *Job) Build() {
 	status := func(msg string) {
 		out <- batt.Message{"status", url.Values{
-			"h": []string{h}, "text": []string{msg},
+			"h": []string{j.h}, "text": []string{j.path},
 		}}
 	}
-	do := func() error {
+	result := batt.Message{"result", url.Values{"h": []string{j.h}}}
+	build := func() error {
 		status("starting")
 
 		// create virgin environment
@@ -133,7 +151,7 @@ func build(h, path string) {
 
 		// get and install package
 		status("fetching")
-		cmd := exec.Command("go", "get", path)
+		cmd := exec.Command("go", "get", j.path)
 		cmd.Env = []string{"GOPATH=" + gopath}
 		if b, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("%v\n%s", b)
@@ -149,18 +167,16 @@ func build(h, path string) {
 			return errors.New("couldn't find binary")
 		}
 		bin := m[0]
-		sha1, err := batt.ReadFileSHA1(bin)
+		h, err := batt.ReadFileSHA1(bin)
 		if err != nil {
 			return err
 		}
-		out <- batt.Message{"built", url.Values{
-			"h":        []string{h},
-			"sha1":     []string{sha1},
-			"filename": []string{filepath.Base(bin)},
-		}}
+		result.Set("sha1", h)
+		result.Set("filename", bin)
 		return nil
 	}
-	if err := do(); err != nil {
-		status(err.Error())
+	if err := build(); err != nil {
+		result.Set("err", err.Error())
 	}
+	out <- result
 }
