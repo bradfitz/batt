@@ -94,6 +94,8 @@ func connect(addr string) error {
 	return err
 }
 
+var doneJobs = make(chan string)
+
 func handler() {
 	jobs := make(map[string]*Job)
 	for {
@@ -102,46 +104,52 @@ func handler() {
 		case <-time.After(nopDelay):
 			out <- batt.Message{Verb: "nop"}
 			continue
+		case h := <-doneJobs:
+			delete(jobs, h)
+			continue
 		case m = <-in:
 		}
-
 		log.Println("Message received:", m)
+
 		switch m.Verb {
-		case "nop":
 		case "build":
-			j := NewJob(m)
-			jobs[j.h] = j
-			go j.Build()
+			h := m.Get("h")
+			j := NewJob(h)
+			jobs[h] = j
+			go j.Build(m.Get("path"))
 		case "accept":
+			h := m.Get("h")
+			j, ok := jobs[h]
+			if !ok {
+				log.Printf("unknown job %q", h)
+				break
+			}
+			go j.Accept(m.Get("url"))
+		case "nop":
 		default:
 			log.Printf("unknown verb %q", m.Verb)
 		}
 	}
 }
 
-func NewJob(m batt.Message) *Job {
-	return &Job{
-		h:    m.Get("h"),
-		path: m.Get("path"),
-		in:   make(chan batt.Message),
-	}
+func NewJob(h string) *Job {
+	return &Job{h: h}
 }
 
 type Job struct {
-	h, path string
-	in      chan batt.Message
+	h string
 }
 
-func (j *Job) Build() {
-	status := func(msg string) {
-		out <- batt.Message{"status", url.Values{
-			"h": []string{j.h}, "text": []string{j.path},
-		}}
-	}
+func (j *Job) status(msg string) {
+	out <- batt.Message{"status", url.Values{
+		"h": []string{j.h}, "text": []string{msg},
+	}}
+}
+
+func (j *Job) Build(path string) {
+	j.status("starting")
 	result := batt.Message{"result", url.Values{"h": []string{j.h}}}
 	build := func() error {
-		status("starting")
-
 		// create virgin environment
 		gopath, err := ioutil.TempDir("", "battc")
 		if err != nil {
@@ -150,15 +158,15 @@ func (j *Job) Build() {
 		defer os.RemoveAll(gopath)
 
 		// get and install package
-		status("fetching")
-		cmd := exec.Command("go", "get", j.path)
+		j.status("fetching and building")
+		cmd := exec.Command("go", "get", path)
 		cmd.Env = []string{"GOPATH=" + gopath}
 		if b, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("%v\n%s", b)
 		}
 
 		// find and upload binary
-		status("uploading")
+		j.status("hashing")
 		m, err := filepath.Glob(filepath.Join(gopath, "bin"))
 		if err != nil {
 			return err
@@ -179,4 +187,9 @@ func (j *Job) Build() {
 		result.Set("err", err.Error())
 	}
 	out <- result
+}
+
+func (j *Job) Accept(uploadUrl string) {
+	j.status("uploading")
+	doneJobs <- j.h
 }
