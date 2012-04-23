@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	webListen = flag.String("web", ":8080", "web listen address")
+	webListen = flag.String("web", ":8082", "web listen address")
 	tcpListen = flag.String("tcp", ":9999", "TCP listen address")
 )
 
