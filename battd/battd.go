@@ -6,6 +6,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
+	"sync"
+	"time"
 
 	"github.com/bradfitz/batt"
 )
@@ -42,24 +45,131 @@ func acceptWorkers(ln net.Listener) {
 		if err != nil {
 			log.Fatalf("Accept: %v", err)
 		}
-		go runWorker(c)
+		go handleWorkerConn(c)
 	}
 }
 
-func runWorker(nc net.Conn) {
+func handleWorkerConn(nc net.Conn) {
 	defer nc.Close()
 	addr := nc.RemoteAddr()
+
+	boot := make(chan string, 1)
+	defer func() {
+		var reason string
+		select {
+		case reason = <-boot:
+		default:
+		}
+		log.Printf("Worker conn %s disconnected; reason=%v", addr, reason)
+	}()
+
 	log.Printf("Got potential worker connection from %s", addr)
+
+	// They get 5 seconds to authenticate.
+	authTimer := time.AfterFunc(5*time.Second, func() {
+		boot <- "login timeout"
+		nc.Close()
+	})
+
 	c := batt.NewConn(nc)
+	m, err := c.Read()
+	if err != nil {
+		boot <- fmt.Sprintf("inital message read error: %v", err)
+		return
+	}
+	if m.Verb != "hello" {
+		boot <- "speaking while not authenticated"
+		return
+	}
+	if batt.Secret == "" || m.Get("k") != batt.Secret {
+		boot <- fmt.Sprintf("bad password; want %q", batt.Secret)
+		return
+	}
+	authTimer.Stop()
+
+	platforms := m.Values["p"]
+	log.Printf("Worker conn %s authenticated; working for clients: %+v", addr, platforms)
+	c.Write(batt.Message{Verb: "hello"})
+
+	w := &Worker{
+		Addr:      addr.String(),
+		Platforms: platforms,
+		Conn:      c,
+		in:        make(chan interface{}),
+	}
+	registerWorker(w)
+	defer unregisterWorker(w)
+	defer close(w.in)
+
+	go w.loop()
 	for {
 		m, err := c.Read()
 		if err != nil {
+			boot <- fmt.Sprintf("message read error: %v", err)
 			log.Printf("Worker conn %v shut down: %v", addr, err)
 			return
 		}
-		log.Printf("Message from %s: %+v", addr, m)
+		w.in <- m
 	}
 	panic("unreachable")
+}
+
+var (
+	mu      sync.Mutex
+	workers = map[string]map[*Worker]bool{}
+)
+
+func registerWorker(w *Worker) {
+	mu.Lock()
+	defer mu.Unlock()
+	for _, p := range w.Platforms {
+		if _, ok := workers[p]; !ok {
+			workers[p] = make(map[*Worker]bool)
+		}
+		workers[p][w] = true
+	}
+}
+
+func unregisterWorker(w *Worker) {
+	mu.Lock()
+	defer mu.Unlock()
+	for _, p := range w.Platforms {
+		delete(workers[p], w)
+	}
+}
+
+type Worker struct {
+	Addr      string
+	Platforms []string // "linux-amd64"
+	Conn      *batt.Conn
+	in        chan interface{}
+}
+
+func (w *Worker) loop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			w.Conn.Write(batt.Message{Verb: "nop"})
+		case mi, ok := <-w.in:
+			if !ok {
+				return
+			}
+			switch m := mi.(type) {
+			case batt.Message:
+				log.Printf("Message from %s: %+v", w.Addr, m)
+				switch m.Verb {
+				case "nop":
+					// Nothing.
+					continue
+				default:
+					w.Conn.Write(batt.Message{Verb: "error", Values: url.Values{"text": []string{"Unknown verb " + m.Verb}}})
+				}
+			}
+		}
+	}
+
 }
 
 func main() {
