@@ -116,7 +116,7 @@ func handleWorkerConn(nc net.Conn) {
 
 var (
 	mu      sync.Mutex
-	workers = map[string]map[*Worker]bool{}
+	workers = map[string]map[*Worker]bool{} // platform ("linux-amd64") -> set of workers
 )
 
 func registerWorker(w *Worker) {
