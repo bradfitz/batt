@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	webListen  = flag.String("web", ":8080", "web listen address")
-	tcpListen  = flag.String("tcp", ":9999", "TCP listen address")
+	webListen = flag.String("web", ":8080", "web listen address")
+	tcpListen = flag.String("tcp", ":9999", "TCP listen address")
 )
 
 func home(w http.ResponseWriter, r *http.Request) {
@@ -50,14 +50,16 @@ func runWorker(nc net.Conn) {
 	defer nc.Close()
 	addr := nc.RemoteAddr()
 	log.Printf("Got potential worker connection from %s", addr)
-	c := batt.NewConn()
-	go func() {
-		for m := range c.In {
-			log.Printf("Message from %s: %+v", addr, m)
+	c := batt.NewConn(nc)
+	for {
+		m, err := c.Read()
+		if err != nil {
+			log.Printf("Worker conn %v shut down: %v", addr, err)
+			return
 		}
-	}()
-	err := c.Do(nc)
-	log.Printf("Worker conn %v Do = %v", addr, err)
+		log.Printf("Message from %s: %+v", addr, m)
+	}
+	panic("unreachable")
 }
 
 func main() {

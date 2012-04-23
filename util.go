@@ -6,8 +6,8 @@ import (
 )
 
 type Message struct {
-	url.Values
 	Verb string
+	url.Values
 }
 
 func (m Message) String() string {
