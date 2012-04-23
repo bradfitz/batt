@@ -3,6 +3,9 @@ package batt
 import (
 	"fmt"
 	"net/url"
+	"crypto/sha1"
+	"io"
+	"os"
 )
 
 type Message struct {
@@ -27,4 +30,19 @@ func ParseMessage(s string) (m Message, err error) {
 	}
 	m.Values, err = url.ParseQuery(v)
 	return
+}
+
+func ReadFileSHA1(filename string) (string, error) {
+	r, err := os.Open(filename)
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+	h := sha1.New()
+	_, err = io.Copy(h, r)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+
 }
