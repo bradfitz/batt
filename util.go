@@ -1,10 +1,10 @@
 package batt
 
 import (
-	"fmt"
-	"net/url"
 	"crypto/sha1"
+	"fmt"
 	"io"
+	"net/url"
 	"os"
 )
 
