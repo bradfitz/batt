@@ -50,7 +50,9 @@ var homeTemplate = template.Must(template.New("home").Parse(`
     }
   </style>
   <body>
-    <h1>build *all* the things!</h1>
+    <h1>Gophorge</h1>
+    <h2>build *all* the things!</h2>
+    <p>This is a build tool for <a href="http://golang.org/">Go</a> programs. Workers are connected on many platforms and will build executables of any public Go command packages.</p>
     <form action='/build' method='post'>
       <table>
       <tr>
@@ -75,8 +77,8 @@ var homeTemplate = template.Must(template.New("home").Parse(`
       <tr>
         <th>Disclaimer:</th>
 	<td>
-	  <input name='disclaimed' type='checkbox' value='ok'>
-	  <i>I acknowledge that gophorge has no control over the input source code and that the resulting binaries could do anything: wipe your files, destroy your marriage, even sunder the universe. Gophorge provides these binaries as-is, with no warranty or guarantees of any kind. Use at your own risk!</i>
+	<input name='disclaimed' type='checkbox' value='ok' id='legalcheck'>
+	<label for='legalcheck'><i>I acknowledge that gophorge has no control over the input source code and that the resulting binaries could do anything: wipe your files, destroy your computer, send spam, etc.  The builders might even be compromised and put viruses in the executables, even if the source code is harmless.  Gophorge provides these binaries as-is, with no warranty or guarantees of any kind. Use at your own risk!</i></label>
 	</td>
       </tr>
       <tr>
@@ -84,7 +86,8 @@ var homeTemplate = template.Must(template.New("home").Parse(`
       </tr>
       </table>
     </form>
-  </body>
+    <p><hr><small>quick hack by adg and bradfitz. no warranties. use at your own risk. source code is <a href='https://github.com/bradfitz/batt/'>here</a>.</small></p>
+   </body>
 </html>
 `))
 
