@@ -1,11 +1,11 @@
 package batt
 
 import (
-	"path/filepath"
 	"flag"
 	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 )
 

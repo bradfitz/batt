@@ -1,14 +1,25 @@
 package main
 
 import (
+	"bytes"
+	"crypto/rand"
+	"crypto/sha1"
+	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"html/template"
+	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -18,6 +29,8 @@ import (
 var (
 	webListen = flag.String("web", ":8082", "web listen address")
 	tcpListen = flag.String("tcp", ":9999", "TCP listen address")
+	cacheDir  = flag.String("cachedir", "/tmp", "cache dir")
+	baseURL   = flag.String("baseurl", "http://gophorge.com", "base URL")
 )
 
 var homeTemplate = template.Must(template.New("home").Parse(`
@@ -103,8 +116,75 @@ func build(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "invalid platform, or no connected workers", 500)
 		return
 	}
-	_ = w
-	fmt.Fprintf(rw, "should build now")
+
+	bin, err := w.Build(r.FormValue("pkg"), p)
+	if err != nil {
+		rw.Header().Set("Content-Type", "text/html; charset-utf-8")
+		rw.WriteHeader(500)
+		fmt.Fprintf(rw, "<html><body>Error building:<pre>"+html.EscapeString(err.Error())+"</pre></body></html>")
+		return
+	}
+	defer bin.Close()
+	rw.Header().Set("Content-Type", "application/octet-stream")
+	rw.Header().Set("Content-Disposition", "attachment; filename=\"pkg.bin\"")
+	io.Copy(rw, bin)
+}
+
+const maxBinarySize = 32 << 20
+
+// accept a binary
+func accept(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != "PUT" {
+		http.Error(rw, "not a PUT", 400)
+		return
+	}
+	q := r.URL.Query()
+	size, err := strconv.Atoi(q.Get("size"))
+	if err != nil || size < 1 || size > maxBinarySize {
+		http.Error(rw, "bad size", 400)
+		return
+	}
+
+	qsha1 := q.Get("sha1")
+	if !validSHA1.MatchString(qsha1) {
+		http.Error(rw, "bad sha1", 400)
+		return
+	}
+
+	var buf bytes.Buffer
+	s1 := sha1.New()
+	n, err := io.Copy(io.MultiWriter(&buf, s1), io.LimitReader(r.Body, int64(size)))
+	if err != nil {
+		log.Printf("copy error: %v", err)
+		http.Error(rw, "copy error", 400)
+		return
+	}
+	if n != int64(size) {
+		http.Error(rw, "bad size", 400)
+		return
+	}
+	if fmt.Sprintf("%x", s1.Sum(nil)) != qsha1 {
+		http.Error(rw, "bad sha1", 400)
+		return
+	}
+
+	filename := filepath.Join(*cacheDir, qsha1+".battd")
+	err = ioutil.WriteFile(filename, buf.Bytes(), 0644)
+	if err != nil {
+		log.Printf("WriteFile: %v", err)
+		http.Error(rw, "fs write error", 500)
+		return
+	}
+
+	// Run callbacks.
+	mu.Lock()
+	defer mu.Unlock()
+	for _, fn := range sha1Sub[qsha1] {
+		fn()
+	}
+	delete(sha1Sub, qsha1)
+
+	rw.WriteHeader(204)
 }
 
 func acceptWorkers(ln net.Listener) {
@@ -183,9 +263,16 @@ func handleWorkerConn(nc net.Conn) {
 }
 
 var (
-	mu      sync.Mutex
+	mu      sync.Mutex                      // guards registry maps below
 	workers = map[string]map[*Worker]bool{} // platform ("linux-amd64") -> set of workers
+	sha1Sub = map[string][]func(){}         // sha1 -> callbacks
 )
+
+func registerSHA1Callback(s string, fn func()) {
+	mu.Lock()
+	defer mu.Unlock()
+	sha1Sub[s] = append(sha1Sub[s], fn)
+}
 
 func registerWorker(w *Worker) {
 	mu.Lock()
@@ -227,6 +314,19 @@ func platforms() (s []string) {
 	return
 }
 
+func newHandle() string {
+	randBuf := make([]byte, 16)
+	io.ReadFull(rand.Reader, randBuf)
+	return fmt.Sprintf("%x", randBuf)
+}
+
+type BuildRequest struct {
+	Handle   string // random opaque
+	Package  string
+	Platform string
+	Res      chan interface{} // an error or an io.ReadCloser
+}
+
 type Worker struct {
 	Addr      string
 	Platforms []string // "linux-amd64"
@@ -234,9 +334,27 @@ type Worker struct {
 	in        chan interface{}
 }
 
+func (w *Worker) Build(pkg, platform string) (io.ReadCloser, error) {
+	br := &BuildRequest{
+		Handle:   newHandle(),
+		Package:  pkg,
+		Platform: platform,
+		Res:      make(chan interface{}, 1),
+	}
+	w.in <- br
+	v := <-br.Res
+	if err, ok := v.(error); ok {
+		return nil, err
+	}
+	return v.(io.ReadCloser), nil
+}
+
 func (w *Worker) loop() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+
+	outstanding := map[string]*BuildRequest{} // keyed by BuildRequest.Handle
+
 	for {
 		select {
 		case <-ticker.C:
@@ -246,25 +364,96 @@ func (w *Worker) loop() {
 				return
 			}
 			switch m := mi.(type) {
+			case func():
+				m()
 			case batt.Message:
 				log.Printf("Message from %s: %+v", w.Addr, m)
 				switch m.Verb {
 				case "nop":
 					// Nothing.
 					continue
+				case "status":
+					br, ok := outstanding[m.Get("h")]
+					if ok {
+						log.Printf("Worker status for %v: %s", br, m.Get("text"))
+					}
+				case "result":
+					handle := m.Get("h")
+					br, ok := outstanding[handle]
+					if !ok {
+						return
+					}
+					errText := m.Get("err")
+					if errText != "" {
+						delete(outstanding, handle)
+						br.Res <- errors.New(errText)
+						continue
+					}
+					sha1 := m.Get("sha1")
+					rc, ok := findCachedSHA1(sha1)
+					if ok {
+						delete(outstanding, handle)
+						br.Res <- rc
+						return
+					}
+
+					registerSHA1Callback(sha1, func() {
+						w.in <- func() {
+							delete(outstanding, handle)
+							rc, ok := findCachedSHA1(sha1)
+							if !ok {
+								br.Res <- errors.New("missing expected sha1 file")
+								return
+							}
+							br.Res <- rc
+						}
+					})
+					acceptURL := *baseURL + "/accept?size=" + m.Get("size") + "&sha1=" + sha1
+					w.Conn.Write(batt.Message{
+						Verb: "accept",
+						Values: url.Values{
+							"h":   []string{br.Handle},
+							"url": []string{acceptURL},
+						}})
 				default:
-					w.Conn.Write(batt.Message{Verb: "error", Values: url.Values{"text": []string{"Unknown verb " + m.Verb}}})
+					log.Printf("Unknown message: %v", batt.Message{Verb: "error", Values: url.Values{"text": []string{"Unknown verb " + m.Verb}}})
 				}
+			case *BuildRequest:
+				br := m
+				outstanding[br.Handle] = br
+				brm := batt.Message{
+					Verb: "build",
+					Values: url.Values{
+						"h":        []string{br.Handle},
+						"platform": []string{br.Platform},
+						"path":     []string{br.Package},
+					},
+				}
+				log.Printf("Sending build request message: %v", brm)
+				w.Conn.Write(brm)
 			}
 		}
 	}
+}
 
+var validSHA1 = regexp.MustCompile(`^[0-9a-f]{40,40}$`)
+
+func findCachedSHA1(sha1 string) (io.ReadCloser, bool) {
+	if !validSHA1.MatchString(sha1) {
+		return nil, false
+	}
+	f, err := os.Open(filepath.Join(*cacheDir, sha1+".battd"))
+	if err == nil {
+		return f, true
+	}
+	return nil, false
 }
 
 func main() {
 	batt.Init()
 
 	http.HandleFunc("/", home)
+	http.HandleFunc("/accept", accept)
 	http.HandleFunc("/build", build)
 
 	log.Printf("Listening for worker connections on %s", *tcpListen)
