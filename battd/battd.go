@@ -37,7 +37,7 @@ var (
 var homeTemplate = template.Must(template.New("home").Parse(`
 <html>
   <head>
-    <title>build *all* the things!</title>
+    <title>gophorge</title>
   </head>
   <style>
     body {
