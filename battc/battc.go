@@ -107,7 +107,10 @@ func handler() {
 			continue
 		case m = <-in:
 		}
-		log.Println("Message received:", m)
+		if m.Verb == "nop" {
+			continue // ignore
+		}
+		log.Println("received:", m)
 
 		switch m.Verb {
 		case "build":
@@ -124,7 +127,6 @@ func handler() {
 			}
 			delete(jobs, h)
 			go j.Accept(m.Get("url"))
-		case "nop":
 		default:
 			log.Printf("unknown verb %q", m.Verb)
 		}
