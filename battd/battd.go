@@ -59,7 +59,7 @@ var homeTemplate = template.Must(template.New("home").Parse(`
         <th>Package:</th>
 	<td>
 	  <input name='pkg' size='100'><br>
-	  <i>(eg, "github.com/bradfitz/battd")</i>
+	  <i>(eg, "github.com/nf/todo")</i>
 	</td>
       </tr>
       <tr>
@@ -220,7 +220,9 @@ func platforms() (s []string) {
 	mu.Lock()
 	defer mu.Unlock()
 	for p := range workers {
-		s = append(s, p)
+		if len(workers[p]) > 0 {
+			s = append(s, p)
+		}
 	}
 	sort.Strings(s)
 	return
