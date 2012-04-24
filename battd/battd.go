@@ -121,17 +121,17 @@ func build(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bin, err := w.Build(r.FormValue("pkg"), p)
+	rc, filename, err := w.Build(r.FormValue("pkg"), p)
 	if err != nil {
 		rw.Header().Set("Content-Type", "text/html; charset-utf-8")
 		rw.WriteHeader(500)
 		fmt.Fprintf(rw, "<html><body>Error building:<pre>"+html.EscapeString(err.Error())+"</pre></body></html>")
 		return
 	}
-	defer bin.Close()
+	defer rc.Close()
 	rw.Header().Set("Content-Type", "application/octet-stream")
-	rw.Header().Set("Content-Disposition", "attachment; filename=\"pkg.bin\"")
-	io.Copy(rw, bin)
+	rw.Header().Set("Content-Disposition", `attachment; filename="`+url.QueryEscape(filename)+`"`)
+	io.Copy(rw, rc)
 }
 
 const maxBinarySize = 32 << 20
@@ -328,7 +328,13 @@ type BuildRequest struct {
 	Handle   string // random opaque
 	Package  string
 	Platform string
-	Res      chan interface{} // an error or an io.ReadCloser
+	Res      chan BuildResult
+}
+
+type BuildResult struct {
+	io.ReadCloser
+	Filename string
+	Error    error
 }
 
 type Worker struct {
@@ -342,19 +348,19 @@ func (w *Worker) String() string {
 	return fmt.Sprintf("[Worker %v: %+v]", w.Addr, w.Platforms)
 }
 
-func (w *Worker) Build(pkg, platform string) (io.ReadCloser, error) {
+func (w *Worker) Build(pkg, platform string) (io.ReadCloser, string, error) {
 	br := &BuildRequest{
 		Handle:   newHandle(),
 		Package:  pkg,
 		Platform: platform,
-		Res:      make(chan interface{}, 1),
+		Res:      make(chan BuildResult, 1),
 	}
 	w.in <- br
-	v := <-br.Res
-	if err, ok := v.(error); ok {
-		return nil, err
+	r := <-br.Res
+	if r.Error != nil {
+		return nil, "", r.Error
 	}
-	return v.(io.ReadCloser), nil
+	return r, r.Filename, nil
 }
 
 func (w *Worker) loop() {
@@ -394,14 +400,14 @@ func (w *Worker) loop() {
 					errText := m.Get("err")
 					if errText != "" {
 						delete(outstanding, handle)
-						br.Res <- errors.New(errText)
+						br.Res <- BuildResult{Error: errors.New(errText)}
 						continue
 					}
 					sha1 := m.Get("sha1")
 					rc, ok := findCachedSHA1(sha1)
 					if ok {
 						delete(outstanding, handle)
-						br.Res <- rc
+						br.Res <- BuildResult{rc, m.Get("filename"), nil}
 						return
 					}
 
@@ -410,10 +416,10 @@ func (w *Worker) loop() {
 							delete(outstanding, handle)
 							rc, ok := findCachedSHA1(sha1)
 							if !ok {
-								br.Res <- errors.New("missing expected sha1 file")
+								br.Res <- BuildResult{Error: errors.New("missing expected sha1 file")}
 								return
 							}
-							br.Res <- rc
+							br.Res <- BuildResult{rc, m.Get("filename"), nil}
 						}
 					})
 					acceptURL := *baseURL + "/accept?size=" + m.Get("size") + "&sha1=" + sha1
