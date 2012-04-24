@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/hmac"
 	"crypto/sha1"
 	"errors"
 	"flag"
@@ -152,6 +153,10 @@ func accept(rw http.ResponseWriter, r *http.Request) {
 	qsha1 := q.Get("sha1")
 	if !validSHA1.MatchString(qsha1) {
 		http.Error(rw, "bad sha1", 400)
+		return
+	}
+	if q.Get("k") != hmacSHA1(qsha1) {
+		http.Error(rw, "bad hmac key", 400)
 		return
 	}
 
@@ -318,10 +323,17 @@ func platforms() (s []string) {
 	return
 }
 
+func randomBytes(n int) []byte {
+	b := make([]byte, n)
+	_, err := io.ReadFull(rand.Reader, b)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
 func newHandle() string {
-	randBuf := make([]byte, 16)
-	io.ReadFull(rand.Reader, randBuf)
-	return fmt.Sprintf("%x", randBuf)
+	return fmt.Sprintf("%x", randomBytes(16))
 }
 
 type BuildRequest struct {
@@ -397,18 +409,18 @@ func (w *Worker) loop() {
 						br.Res <- errors.New(errText)
 						continue
 					}
-					sha1 := m.Get("sha1")
-					rc, ok := findCachedSHA1(sha1)
+					sha := m.Get("sha1")
+					rc, ok := findCachedSHA1(sha)
 					if ok {
 						delete(outstanding, handle)
 						br.Res <- rc
 						return
 					}
 
-					registerSHA1Callback(sha1, func() {
+					registerSHA1Callback(sha, func() {
 						w.in <- func() {
 							delete(outstanding, handle)
-							rc, ok := findCachedSHA1(sha1)
+							rc, ok := findCachedSHA1(sha)
 							if !ok {
 								br.Res <- errors.New("missing expected sha1 file")
 								return
@@ -416,7 +428,7 @@ func (w *Worker) loop() {
 							br.Res <- rc
 						}
 					})
-					acceptURL := *baseURL + "/accept?size=" + m.Get("size") + "&sha1=" + sha1
+					acceptURL := *baseURL + "/accept?size=" + m.Get("size") + "&sha1=" + sha + "&k=" + hmacSHA1(sha)
 					w.Conn.Write(batt.Message{
 						Verb: "accept",
 						Values: url.Values{
@@ -442,6 +454,14 @@ func (w *Worker) loop() {
 			}
 		}
 	}
+}
+
+var serverKey = randomBytes(128)
+
+func hmacSHA1(in string) string {
+	h := hmac.New(sha1.New, serverKey)
+	io.WriteString(h, in)
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 var validSHA1 = regexp.MustCompile(`^[0-9a-f]{40,40}$`)
