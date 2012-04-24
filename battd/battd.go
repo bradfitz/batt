@@ -101,7 +101,7 @@ func home(w http.ResponseWriter, r *http.Request) {
 		Platforms: platforms(),
 	})
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 }
 
