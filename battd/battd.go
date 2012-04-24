@@ -1,9 +1,12 @@
 package main
 
 import (
+	"crypto/rand"
 	"flag"
 	"fmt"
+	"html"
 	"html/template"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -93,8 +96,16 @@ func build(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "invalid platform, or no connected workers", 500)
 		return
 	}
-	_ = w
-	fmt.Fprintf(rw, "should build now")
+
+	bin, err := w.Build(r.FormValue("pkg"), p)
+	if err != nil {
+		http.Error(rw, "Error building:<pre>"+html.EscapeString(err.Error())+"</pre>\n", 500)
+		return
+	}
+	defer bin.Close()
+	rw.Header().Set("Content-Type", "application/octet-stream")
+	rw.Header().Set("Content-Disposition", "attachment; filename=\"pkg.bin\"")
+	io.Copy(rw, bin)
 }
 
 func acceptWorkers(ln net.Listener) {
@@ -215,6 +226,19 @@ func platforms() (s []string) {
 	return
 }
 
+func newHandle() string {
+	randBuf := make([]byte, 16)
+	io.ReadFull(rand.Reader, randBuf)
+	return fmt.Sprintf("%x", randBuf)
+}
+
+type BuildRequest struct {
+	Handle   string // random opaque
+	Package  string
+	Platform string
+	Res      chan interface{} // an error or an io.ReadCloser
+}
+
 type Worker struct {
 	Addr      string
 	Platforms []string // "linux-amd64"
@@ -222,9 +246,27 @@ type Worker struct {
 	in        chan interface{}
 }
 
+func (w *Worker) Build(pkg, platform string) (io.ReadCloser, error) {
+	br := &BuildRequest{
+		Handle:   newHandle(),
+		Package:  pkg,
+		Platform: platform,
+		Res:      make(chan interface{}, 1),
+	}
+	w.in <- br
+	v := <-br.Res
+	if err, ok := v.(error); ok {
+		return nil, err
+	}
+	return v.(io.ReadCloser), nil
+}
+
 func (w *Worker) loop() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+
+	outstanding := map[string]*BuildRequest{} // keyed by BuildRequest.Handle
+
 	for {
 		select {
 		case <-ticker.C:
@@ -243,10 +285,21 @@ func (w *Worker) loop() {
 				default:
 					w.Conn.Write(batt.Message{Verb: "error", Values: url.Values{"text": []string{"Unknown verb " + m.Verb}}})
 				}
+			case *BuildRequest:
+				br := m
+				outstanding[br.Handle] = br
+				brm := batt.Message{
+					Verb: "build",
+					Values: url.Values{
+						"platform": []string{br.Platform},
+						"path":     []string{br.Package},
+					},
+				}
+				log.Printf("Sending build request message: %v", brm)
+				w.Conn.Write(brm)
 			}
 		}
 	}
-
 }
 
 func main() {
