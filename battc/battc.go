@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"io"
 	"io/ioutil"
 	"log"
@@ -96,8 +97,6 @@ func connect(addr string) error {
 	return err
 }
 
-var doneJobs = make(chan string)
-
 func handler() {
 	jobs := make(map[string]*Job)
 	for {
@@ -105,9 +104,6 @@ func handler() {
 		select {
 		case <-time.After(nopDelay):
 			out <- batt.Message{Verb: "nop"}
-			continue
-		case h := <-doneJobs:
-			delete(jobs, h)
 			continue
 		case m = <-in:
 		}
@@ -126,6 +122,7 @@ func handler() {
 				log.Printf("unknown job %q", h)
 				break
 			}
+			delete(jobs, h)
 			go j.Accept(m.Get("url"))
 		case "nop":
 		default:
@@ -209,12 +206,34 @@ func (j *Job) Build(path string) {
 	log.Println(result)
 	log.Println("tmpfile:", j.tmpfile)
 	out <- result
+
+	j.status("waiting for upload url")
 }
 
 func (j *Job) Accept(uploadUrl string) {
 	defer os.Remove(j.tmpfile)
+	defer j.status("done")
 	j.status("uploading")
-	doneJobs <- j.h
+	f, err := os.Open(j.tmpfile)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer f.Close()
+	req, err := http.NewRequest("PUT", uploadUrl, f)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	res, err := http.DefaultTransport.RoundTrip(req)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	if res.StatusCode != 200 {
+		log.Println("bad upload:", res.Status)
+		return
+	}
 }
 
 func env(gopath string) []string {
