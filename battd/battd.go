@@ -60,6 +60,13 @@ var homeTemplate = template.Must(template.New("home").Parse(`
 	</td>
       </tr>
       <tr>
+        <th>Disclaimer:</th>
+	<td>
+	  <input name='disclaimed' type='checkbox' value='ok'>
+	  <i>I acknowledge that gophorge has no control over the input source code and that the resulting binaries could do anything: wipe your files, destroy your marriage, even sunder the universe. Gophorge provides these binaries as-is, with no warranty or guarantees of any kind. Use at your own risk!</i>
+	</td>
+      </tr>
+      <tr>
         <th></th><td><input type='submit' value='Build'></td>
       </tr>
       </table>
@@ -85,6 +92,9 @@ func build(rw http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(rw, "not a POST", 400)
 		return
+	}
+	if r.FormValue("disclaimed") != "ok" {
+		http.Error(rw, "You must accept the disclaimer to use this service.", 402)
 	}
 
 	p := r.FormValue("platform")
