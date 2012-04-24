@@ -159,10 +159,8 @@ func (j *Job) Build(path string) {
 		if err != nil {
 			return err
 		}
-		//	defer os.RemoveAll(gopath)
-		log.Println(gopath)
+		defer os.RemoveAll(gopath)
 
-		// get and install package
 		j.status("fetching and building")
 		cmd := exec.Command("go", "get", path)
 		cmd.Env = env(gopath)
@@ -185,39 +183,31 @@ func (j *Job) Build(path string) {
 			return errors.New("couldn't find binary")
 		}
 		bin := filepath.Join(bindir, fis[0].Name())
+		j.filename = filepath.Base(bin)
+		result.Set("filename", j.filename)
+		result.Set("size", fmt.Sprint(fis[0].Size()))
 
 		j.status("hashing")
 		h, err := batt.ReadFileSHA1(bin)
 		if err != nil {
 			return err
 		}
-
-		// copy to tempfile outside gopath
-		j.status("storing file")
-		r, err := os.Open(bin)
-		if err != nil {
-			return err
-		}
-		defer r.Close()
-		f, err := ioutil.TempFile("", h)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		_, err = io.Copy(f, r)
-		if err != nil {
-			return err
-		}
-		j.tmpfile = f.Name()
-		j.filename = filepath.Base(bin)
-		result.Set("filename", j.filename)
 		result.Set("sha1", h)
+
+		j.status("storing file")
+		tmpfile, err := cpToTempFile(bin, h)
+		if err != nil {
+			return err
+		}
+		j.tmpfile = tmpfile
+
 		return nil
 	}
 	if err := build(); err != nil {
 		result.Set("err", err.Error())
 	}
-	log.Println(j.tmpfile, result)
+	log.Println(result)
+	log.Println("tmpfile:", j.tmpfile)
 	out <- result
 }
 
@@ -239,4 +229,22 @@ func env(gopath string) []string {
 		}
 	}
 	return s
+}
+
+func cpToTempFile(filename, tmpfilename string) (tmpfile string, err error) {
+	r, err := os.Open(filename)
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+	f, err := ioutil.TempFile("", tmpfilename)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, r)
+	if err != nil {
+		return "", err
+	}
+	return f.Name(), nil
 }
