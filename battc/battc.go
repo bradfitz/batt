@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bradfitz/batt"
@@ -137,7 +139,9 @@ func NewJob(h string) *Job {
 }
 
 type Job struct {
-	h string
+	h        string
+	tmpfile  string // temporary location of build result
+	filename string
 }
 
 func (j *Job) status(msg string) {
@@ -155,41 +159,84 @@ func (j *Job) Build(path string) {
 		if err != nil {
 			return err
 		}
-		defer os.RemoveAll(gopath)
+		//	defer os.RemoveAll(gopath)
+		log.Println(gopath)
 
 		// get and install package
 		j.status("fetching and building")
 		cmd := exec.Command("go", "get", path)
-		cmd.Env = []string{"GOPATH=" + gopath}
+		cmd.Env = env(gopath)
 		if b, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("%v\n%s", b)
+			return fmt.Errorf("%v\n%s", err, b)
 		}
 
-		// find and upload binary
-		j.status("hashing")
-		m, err := filepath.Glob(filepath.Join(gopath, "bin"))
+		j.status("finding binary")
+		bindir := filepath.Join(gopath, "bin")
+		dir, err := os.Open(bindir)
 		if err != nil {
 			return err
 		}
-		if len(m) < 1 {
+		defer dir.Close()
+		fis, err := dir.Readdir(0)
+		if err != nil {
+			return err
+		}
+		if len(fis) < 1 {
 			return errors.New("couldn't find binary")
 		}
-		bin := m[0]
+		bin := filepath.Join(bindir, fis[0].Name())
+
+		j.status("hashing")
 		h, err := batt.ReadFileSHA1(bin)
 		if err != nil {
 			return err
 		}
+
+		// copy to tempfile outside gopath
+		j.status("storing file")
+		r, err := os.Open(bin)
+		if err != nil {
+			return err
+		}
+		defer r.Close()
+		f, err := ioutil.TempFile("", h)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = io.Copy(f, r)
+		if err != nil {
+			return err
+		}
+		j.tmpfile = f.Name()
+		j.filename = filepath.Base(bin)
+		result.Set("filename", j.filename)
 		result.Set("sha1", h)
-		result.Set("filename", bin)
 		return nil
 	}
 	if err := build(); err != nil {
 		result.Set("err", err.Error())
 	}
+	log.Println(j.tmpfile, result)
 	out <- result
 }
 
 func (j *Job) Accept(uploadUrl string) {
+	defer os.Remove(j.tmpfile)
 	j.status("uploading")
 	doneJobs <- j.h
+}
+
+func env(gopath string) []string {
+	s := os.Environ()
+	for i := len(s) - 1; i >= 0; i-- {
+		switch {
+		case strings.HasPrefix(s[i], "GOPATH="):
+			s[i] = "GOPATH=" + gopath
+		case strings.HasPrefix(s[i], "GOBIN="):
+			s[i] = s[len(s)-1]
+			s = s[:len(s)-1]
+		}
+	}
+	return s
 }
