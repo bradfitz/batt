@@ -324,6 +324,10 @@ type Worker struct {
 	in        chan interface{}
 }
 
+func (w *Worker) String() string {
+	return fmt.Sprintf("[Worker %v: %+v]", w.Addr, w.Platforms)
+}
+
 func (w *Worker) Build(pkg, platform string) (io.ReadCloser, error) {
 	br := &BuildRequest{
 		Handle:   newHandle(),
@@ -357,7 +361,7 @@ func (w *Worker) loop() {
 			case func():
 				m()
 			case batt.Message:
-				log.Printf("Message from %s: %+v", w.Addr, m)
+				log.Printf("Message from %s: %+v", w, m)
 				switch m.Verb {
 				case "nop":
 					// Nothing.
