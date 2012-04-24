@@ -4,13 +4,16 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bradfitz/batt"
@@ -94,8 +97,6 @@ func connect(addr string) error {
 	return err
 }
 
-var doneJobs = make(chan string)
-
 func handler() {
 	jobs := make(map[string]*Job)
 	for {
@@ -103,9 +104,6 @@ func handler() {
 		select {
 		case <-time.After(nopDelay):
 			out <- batt.Message{Verb: "nop"}
-			continue
-		case h := <-doneJobs:
-			delete(jobs, h)
 			continue
 		case m = <-in:
 		}
@@ -124,6 +122,7 @@ func handler() {
 				log.Printf("unknown job %q", h)
 				break
 			}
+			delete(jobs, h)
 			go j.Accept(m.Get("url"))
 		case "nop":
 		default:
@@ -137,7 +136,9 @@ func NewJob(h string) *Job {
 }
 
 type Job struct {
-	h string
+	h        string
+	tmpfile  string // temporary location of build result
+	filename string
 }
 
 func (j *Job) status(msg string) {
@@ -157,39 +158,120 @@ func (j *Job) Build(path string) {
 		}
 		defer os.RemoveAll(gopath)
 
-		// get and install package
 		j.status("fetching and building")
 		cmd := exec.Command("go", "get", path)
-		cmd.Env = []string{"GOPATH=" + gopath}
+		cmd.Env = env(gopath)
 		if b, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("%v\n%s", b)
+			return fmt.Errorf("%v\n%s", err, b)
 		}
 
-		// find and upload binary
-		j.status("hashing")
-		m, err := filepath.Glob(filepath.Join(gopath, "bin"))
+		j.status("finding binary")
+		bindir := filepath.Join(gopath, "bin")
+		fi, err := findFile(bindir)
 		if err != nil {
 			return err
 		}
-		if len(m) < 1 {
-			return errors.New("couldn't find binary")
-		}
-		bin := m[0]
+		bin := filepath.Join(bindir, fi.Name())
+		j.filename = fi.Name()
+		result.Set("filename", j.filename)
+		result.Set("size", fmt.Sprint(fi.Size()))
+
+		j.status("hashing")
 		h, err := batt.ReadFileSHA1(bin)
 		if err != nil {
 			return err
 		}
 		result.Set("sha1", h)
-		result.Set("filename", bin)
+
+		j.status("storing file")
+		tmpfile, err := cpToTempFile(bin, h)
+		if err != nil {
+			return err
+		}
+		j.tmpfile = tmpfile
+
 		return nil
 	}
 	if err := build(); err != nil {
 		result.Set("err", err.Error())
 	}
+	log.Println(result)
+	log.Println("tmpfile:", j.tmpfile)
 	out <- result
+
+	j.status("waiting for upload url")
 }
 
 func (j *Job) Accept(uploadUrl string) {
+	defer os.Remove(j.tmpfile)
+	defer j.status("done")
 	j.status("uploading")
-	doneJobs <- j.h
+	f, err := os.Open(j.tmpfile)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer f.Close()
+	req, err := http.NewRequest("PUT", uploadUrl, f)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	res, err := http.DefaultTransport.RoundTrip(req)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	if res.StatusCode != 200 {
+		log.Println("bad upload:", res.Status)
+		return
+	}
+}
+
+func env(gopath string) []string {
+	s := os.Environ()
+	for i := len(s) - 1; i >= 0; i-- {
+		switch {
+		case strings.HasPrefix(s[i], "GOPATH="):
+			s[i] = "GOPATH=" + gopath
+		case strings.HasPrefix(s[i], "GOBIN="):
+			s[i] = s[len(s)-1]
+			s = s[:len(s)-1]
+		}
+	}
+	return s
+}
+
+func cpToTempFile(filename, tmpfilename string) (tmpfile string, err error) {
+	r, err := os.Open(filename)
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+	f, err := ioutil.TempFile("", tmpfilename)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, r)
+	if err != nil {
+		return "", err
+	}
+	return f.Name(), nil
+}
+
+func findFile(dir string) (os.FileInfo, error) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer d.Close()
+	fis, err := d.Readdir(0)
+	if err != nil {
+		return nil, err
+	}
+	if len(fis) < 1 {
+		return nil, errors.New("couldn't find file")
+	}
+	return fis[0], nil
 }
