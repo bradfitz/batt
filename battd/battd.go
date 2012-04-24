@@ -111,6 +111,7 @@ func build(rw http.ResponseWriter, r *http.Request) {
 	}
 	if r.FormValue("disclaimed") != "ok" {
 		http.Error(rw, "You must accept the disclaimer to use this service.", 402)
+		return
 	}
 
 	p := r.FormValue("platform")
