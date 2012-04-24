@@ -209,7 +209,9 @@ func platforms() (s []string) {
 	mu.Lock()
 	defer mu.Unlock()
 	for p := range workers {
-		s = append(s, p)
+		if len(workers[p]) > 0 {
+			s = append(s, p)
+		}
 	}
 	sort.Strings(s)
 	return
