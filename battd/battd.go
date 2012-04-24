@@ -2,8 +2,8 @@ package main
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha1"
 	"errors"
 	"flag"
@@ -97,6 +97,10 @@ type homeTemplateData struct {
 }
 
 func home(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "HEAD" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		return
+	}
 	err := homeTemplate.Execute(w, homeTemplateData{
 		Platforms: platforms(),
 	})
