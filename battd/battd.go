@@ -3,10 +3,12 @@ package main
 import (
 	"flag"
 	"fmt"
+	"html/template"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"sync"
 	"time"
 
@@ -18,16 +20,65 @@ var (
 	tcpListen = flag.String("tcp", ":9999", "TCP listen address")
 )
 
+var homeTemplate = template.Must(template.New("home").Parse(`
+<html>
+  <head>
+    <title>build *all* the things!</title>
+  </head>
+  <style>
+    body {
+      font-family: sans-serif;
+    }
+    td, th {
+      vertical-align: top;
+    }
+    th {
+      text-align: left;
+    }
+  </style>
+  <body>
+    <h1>build *all* the things!</h1>
+    <form action='/build' method='post'>
+      <table>
+      <tr>
+        <th>Platform:</th>
+        <td>
+	  {{with .Platforms}}
+            {{range .}}
+	      <label><input type="radio" name="platform" value="{{.}}"> {{.}}</label><br>
+            {{end}}
+	  {{else}}
+	    None available; try again soon!
+	  {{end}}
+	</td>
+      </tr>
+      <tr>
+        <th>Package:</th>
+	<td>
+	  <input name='pkg' size='100'><br>
+	  <i>(eg, "github.com/bradfitz/battd")</i>
+	</td>
+      </tr>
+      <tr>
+        <th></th><td><input type='submit' value='Build'></td>
+      </tr>
+      </table>
+    </form>
+  </body>
+</html>
+`))
+
+type homeTemplateData struct {
+	Platforms []string
+}
+
 func home(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, `<html><head>
-  <title>build *all* the things!</title>
-</head>
-<body>
-<h1>build *all* the things!</h1>
-<form action='/build' method='post'>
- Package: <input name='pkg'> <input type='submit' value='build'>
-</form>
-</body></html>`)
+	err := homeTemplate.Execute(w, homeTemplateData{
+		Platforms: platforms(),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 func build(w http.ResponseWriter, r *http.Request) {
@@ -136,6 +187,16 @@ func unregisterWorker(w *Worker) {
 	for _, p := range w.Platforms {
 		delete(workers[p], w)
 	}
+}
+
+func platforms() (s []string) {
+	mu.Lock()
+	defer mu.Unlock()
+	for p := range workers {
+		s = append(s, p)
+	}
+	sort.Strings(s)
+	return
 }
 
 type Worker struct {
