@@ -30,13 +30,20 @@ func home(w http.ResponseWriter, r *http.Request) {
 </body></html>`)
 }
 
-func build(w http.ResponseWriter, r *http.Request) {
+func build(rw http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
-		http.Error(w, "not a POST", 400)
+		http.Error(rw, "not a POST", 400)
 		return
 	}
 
-	fmt.Fprintf(w, "should build now")
+	p := r.FormValue("platform")
+	w, ok := workerForPlatform(p)
+	if !ok {
+		http.Error(rw, "invalid platform, or no connected workers", 500)
+		return
+	}
+	_ = w
+	fmt.Fprintf(rw, "should build now")
 }
 
 func acceptWorkers(ln net.Listener) {
@@ -136,6 +143,15 @@ func unregisterWorker(w *Worker) {
 	for _, p := range w.Platforms {
 		delete(workers[p], w)
 	}
+}
+
+func workerForPlatform(p string) (w *Worker, ok bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	for w := range workers[p] {
+		return w, true
+	}
+	return nil, false
 }
 
 type Worker struct {
