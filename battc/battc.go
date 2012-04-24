@@ -224,7 +224,7 @@ func (j *Job) Accept(uploadUrl string) {
 		log.Println(err)
 		return
 	}
-	if res.StatusCode != 200 {
+	if res.StatusCode%100 != 2 {
 		log.Println("bad upload:", res.Status)
 		return
 	}
