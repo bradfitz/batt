@@ -4,11 +4,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net/http"
 	"io"
 	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -167,22 +167,14 @@ func (j *Job) Build(path string) {
 
 		j.status("finding binary")
 		bindir := filepath.Join(gopath, "bin")
-		dir, err := os.Open(bindir)
+		fi, err := findFile(bindir)
 		if err != nil {
 			return err
 		}
-		defer dir.Close()
-		fis, err := dir.Readdir(0)
-		if err != nil {
-			return err
-		}
-		if len(fis) < 1 {
-			return errors.New("couldn't find binary")
-		}
-		bin := filepath.Join(bindir, fis[0].Name())
-		j.filename = filepath.Base(bin)
+		bin := filepath.Join(bindir, fi.Name())
+		j.filename = fi.Name()
 		result.Set("filename", j.filename)
-		result.Set("size", fmt.Sprint(fis[0].Size()))
+		result.Set("size", fmt.Sprint(fi.Size()))
 
 		j.status("hashing")
 		h, err := batt.ReadFileSHA1(bin)
@@ -266,4 +258,20 @@ func cpToTempFile(filename, tmpfilename string) (tmpfile string, err error) {
 		return "", err
 	}
 	return f.Name(), nil
+}
+
+func findFile(dir string) (os.FileInfo, error) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer d.Close()
+	fis, err := d.Readdir(0)
+	if err != nil {
+		return nil, err
+	}
+	if len(fis) < 1 {
+		return nil, errors.New("couldn't find file")
+	}
+	return fis[0], nil
 }
