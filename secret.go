@@ -6,12 +6,20 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
 var Secret string
 
-var secretFile = flag.String("secretfile", filepath.Join(os.Getenv("HOME"), ".batt-secret"), "filename of secret")
+var secretFile = flag.String("secretfile", filepath.Join(homedir(), ".batt-secret"), "filename of secret")
+
+func homedir() string {
+	if runtime.GOOS == "windows" {
+		return os.Getenv("HOMEPATH")
+	}
+	return os.Getenv("HOME")
+}
 
 func Init() {
 	flag.Parse()
