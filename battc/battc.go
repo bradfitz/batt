@@ -235,13 +235,14 @@ func env(gopath string) []string {
 	for i := len(s) - 1; i >= 0; i-- {
 		switch {
 		case strings.HasPrefix(s[i], "GOPATH="):
-			s[i] = "GOPATH=" + gopath
 		case strings.HasPrefix(s[i], "GOBIN="):
-			s[i] = s[len(s)-1]
-			s = s[:len(s)-1]
+		default:
+			continue
 		}
+		s[i] = s[len(s)-1]
+		s = s[:len(s)-1]
 	}
-	return s
+	return append(s, "GOPATH="+gopath)
 }
 
 func cpToTempFile(filename, tmpfilename string) (tmpfile string, err error) {
