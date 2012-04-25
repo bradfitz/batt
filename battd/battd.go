@@ -54,6 +54,13 @@ var homeTemplate = template.Must(template.New("home").Parse(`
     <h1>Gophorge</h1>
     <h2>build *all* the things!</h2>
     <p>This is a build tool for <a href="http://golang.org/">Go</a> programs. Workers are connected on many platforms and will build executables of any public Go command packages.</p>
+    <ol>
+      <li>Select the platform your want to build for.
+      <li>Supply the import path of the package you want to build.
+      <li>Read and agree to the disclaimer.
+      <li>Click 'Build'.
+      <li>Receive the binary (or error messages).
+    </ol>
     <form action='/build' method='post'>
       <table>
       <tr>
@@ -61,7 +68,7 @@ var homeTemplate = template.Must(template.New("home").Parse(`
         <td>
 	  {{with .Platforms}}
             {{range .}}
-	      <label><input type="radio" name="platform" value="{{.}}"> {{.}}</label><br>
+	      <label><input type='radio' name='platform' value='{{.}}'> {{.}}</label><br>
             {{end}}
 	  {{else}}
 	    None available; try again soon!
